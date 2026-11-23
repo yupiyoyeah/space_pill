@@ -426,20 +426,29 @@ async def fallback(message: Message):
     await message.answer("Нажмите /start, чтобы построить карту D1.")
 
 
+from aiogram.types import User
+
+
 async def main():
     ensure_fonts()
     bot = Bot(token=BOT_TOKEN)
+    
+    # Автоматически берем ID бота из вашего токена, чтобы не вызывать заблокированный GetMe
+    bot_id = int(BOT_TOKEN.split(":")[0])
+    bot._me = User(id=bot_id, is_bot=True, first_name="JyotishBot", username="jyotish_bot")
+    
     dp = Dispatcher()
     dp.include_router(router)
     while True:
         try:
-            # Сразу запускаем polling с увеличенной паузой при ошибке
-            await dp.start_polling(bot, polling_timeout=30)
+            print("Запускаю получение сообщений в обход GetMe...", flush=True)
+            await dp.start_polling(bot, handle_as_tasks=True)
             break
         except Exception as e:
-            print(f"Лимит Telegram, жду 40 секунд: {e}", flush=True)
-            await asyncio.sleep(40)
+            print(f"Ошибка, жду 10 секунд: {e}", flush=True)
+            await asyncio.sleep(10)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
