@@ -433,11 +433,12 @@ async def main():
     dp.include_router(router)
     while True:
         try:
-            await dp.start_polling(bot)
+            # Сразу запускаем polling с увеличенной паузой при ошибке
+            await dp.start_polling(bot, polling_timeout=30)
             break
         except Exception as e:
-            print(f"Ошибка подключения, повтор через 15 сек: {e}")
-            await asyncio.sleep(15)
+            print(f"Лимит Telegram, жду 40 секунд: {e}", flush=True)
+            await asyncio.sleep(40)
 
 
 if __name__ == "__main__":
