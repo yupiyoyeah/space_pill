@@ -431,7 +431,13 @@ async def main():
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
-    await dp.start_polling(bot)
+    while True:
+        try:
+            await dp.start_polling(bot)
+            break
+        except Exception as e:
+            print(f"Ошибка подключения, повтор через 15 сек: {e}")
+            await asyncio.sleep(15)
 
 
 if __name__ == "__main__":
