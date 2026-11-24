@@ -426,29 +426,41 @@ async def fallback(message: Message):
     await message.answer("Нажмите /start, чтобы построить карту D1.")
 
 
+@router.message()
+async def fallback(message: Message):
+    await message.answer("Нажмите /start, чтобы построить карту D1.")
+
+
+import socket
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import User
+
+
+class IPv4Session(AiohttpSession):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._connector_init["family"] = socket.AF_INET
 
 
 async def main():
     ensure_fonts()
-    bot = Bot(token=BOT_TOKEN)
-    
-    # Автоматически берем ID бота из вашего токена, чтобы не вызывать заблокированный GetMe
+    session = IPv4Session(timeout=60)
+    bot = Bot(token=BOT_TOKEN, session=session)
+
     bot_id = int(BOT_TOKEN.split(":")[0])
     bot._me = User(id=bot_id, is_bot=True, first_name="JyotishBot", username="jyotish_bot")
-    
+
     dp = Dispatcher()
     dp.include_router(router)
     while True:
         try:
-            print("Запускаю получение сообщений в обход GetMe...", flush=True)
+            print("Запускаю polling по IPv4...", flush=True)
             await dp.start_polling(bot, handle_as_tasks=True)
             break
         except Exception as e:
-            print(f"Ошибка, жду 10 секунд: {e}", flush=True)
+            print(f"Ошибка сети, повтор через 10 сек: {e}", flush=True)
             await asyncio.sleep(10)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
