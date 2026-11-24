@@ -435,7 +435,7 @@ from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 # ВПИШИТЕ СЮДА ТОТ ЖЕ ДОМЕН, ЧТО УКАЗАЛИ В НАСТРОЙКАХ BOTHOST (с https://)
-WEBHOOK_HOST = "https://bothost.tech"
+WEBHOOK_HOST = "https://spacepill.bothost.tech"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
