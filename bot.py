@@ -431,36 +431,41 @@ async def fallback(message: Message):
     await message.answer("Нажмите /start, чтобы построить карту D1.")
 
 
-import socket
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import User
+from aiohttp import web
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+
+# ВПИШИТЕ СЮДА ТОТ ЖЕ ДОМЕН, ЧТО УКАЗАЛИ В НАСТРОЙКАХ BOTHOST (с https://)
+WEBHOOK_HOST = "https://bothost.tech"
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
 
-class IPv4Session(AiohttpSession):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._connector_init["family"] = socket.AF_INET
+async def on_startup(bot: Bot):
+    await bot.set_webhook(WEBHOOK_URL)
+    print(f"Webhook успешно установлен на {WEBHOOK_URL}", flush=True)
 
 
 async def main():
     ensure_fonts()
-    session = IPv4Session(timeout=60)
-    bot = Bot(token=BOT_TOKEN, session=session)
-
-    bot_id = int(BOT_TOKEN.split(":")[0])
-    bot._me = User(id=bot_id, is_bot=True, first_name="JyotishBot", username="jyotish_bot")
-
+    bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
-    while True:
-        try:
-            print("Запускаю polling по IPv4...", flush=True)
-            await dp.start_polling(bot, handle_as_tasks=True)
-            break
-        except Exception as e:
-            print(f"Ошибка сети, повтор через 10 сек: {e}", flush=True)
-            await asyncio.sleep(10)
+    dp.startup.register(on_startup)
+
+    app = web.Application()
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    port = int(os.getenv("PORT", 3000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Сервер Webhook запущен на порту {port}", flush=True)
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
