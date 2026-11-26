@@ -6,6 +6,7 @@ import html
 import io
 import json
 import os
+import socket
 import sqlite3
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ INSTAGRAM_LINK = "https://instagram.com/space_pill"
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
 LLM_BASE = os.getenv("LLM_API_URL", "https://gpttunnel.ru")
+LLM_FALLBACK = os.getenv("LLM_API_URL_FALLBACK", "https://gpttunnel.ru")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini")
 
@@ -981,7 +983,94 @@ def table_text(data):
     return "<pre>" + html.escape("\n".join(lines)) + "</pre>"
 
 
+NAK_TRAITS = [
+    "быстрый старт, исцеление, импульс", "сила воли, ответственность, страсть к жизни",
+    "острота ума, очищающий огонь", "притягательность, плодородие, чувственность",
+    "любопытство, поиск", "эмоциональные бури, обновление через кризис",
+    "возвращение к себе, щедрость", "забота, наставничество, питание других",
+    "магнетизм, глубина, проницательность", "достоинство, род, власть",
+    "радость, творчество, отдых", "дружба, покровительство, договор",
+    "ловкость рук, мастерство", "красота, создание форм", "независимость, гибкость, торговля",
+    "целеустремленность, достижение цели", "преданность, дружба, сотрудничество",
+    "лидерство, защита, ответственность", "докопаться до корня, трансформация",
+    "непобедимость, вдохновение", "победа через стойкость", "слушание, обучение, связь",
+    "ритм, богатство, музыкальность", "исцеление, тайна, уединение",
+    "огненная духовность, аскеза", "глубина, милосердие, устойчивость",
+    "завершение пути, защита странников"]
+PN = {"Su": "душа, воля, авторитет и самовыражение", "Mo": "чувства, психика и внутренний покой",
+      "Ma": "энергия, отвага и способность действовать", "Me": "ум, речь, торговля и обучение",
+      "Ju": "мудрость, рост, вера и благословение", "Ve": "любовь, красота, удовольствия и гармония",
+      "Sa": "дисциплина, время, ответственность и зрелость",
+      "Ra": "жажда нового опыта, амбиции и выход за рамки",
+      "Ke": "отрешенность, интуиция и мастерство из прошлого опыта"}
+HOUSE_EVENTS = [
+    "характер, внешность, здоровье, самоощущение и стартовые условия жизни",
+    "деньги, семья, речь, питание и накопленные ценности",
+    "инициативу, смелость, навыки, братьев и сестер, поездки и коммуникации",
+    "дом, маму, эмоциональный покой, недвижимость и образование",
+    "творчество, детей, романтику, ум и удачу прошлых заслуг",
+    "работу, службу, здоровье, долги, конкуренцию и победу над трудностями",
+    "брак, партнерство, деловые союзы и публичные отношения",
+    "кризисы, перемены, чужие ресурсы, наследство и глубинные тайны",
+    "удачу, отца, учителей, дальние поездки, веру и высшее знание",
+    "карьеру, статус, репутацию и вклад в общество",
+    "доходы, прибыль, друзей, сообщества и исполнение желаний",
+    "траты, уединение, заграницу, сон и духовное освобождение"]
+
+
+def T(data, a, b):
+    return a if data["style"] == "term" else b
+
+
+def portrait_text(data):
+    g = data["gender"]
+    lag, mo, su = R(data, "As"), R(data, "Mo"), R(data, "Su")
+    ra, ke = R(data, "Ra"), R(data, "Ke")
+    ls = data["lagna"]
+    lord = R(data, SIGN_LORDS[ls])
+    ak = next((r for r in data["rows"] if r["karaka"] == "АК"), None)
+    out = ["<b>✨ Астро-портрет по Паспорту карты</b>", ""]
+    t = (f"<b>🧭 {T(data, 'Лагна и Лагнеш', 'Ваш внешний образ и главный ориентир')}</b>\n"
+         f"{T(data, 'Восходящий знак', 'Знак на горизонте')} — {SIGNS[ls]}: {SIGN_TRAITS[ls]}. "
+         f"{T(data, 'Лагнеш', 'Управитель вашего знака')} {lord['name']} стоит в {lord['house']} доме "
+         f"({HOUSE_KEY[lord['house'] - 1]}), поэтому жизненная энергия {'проявляется' if g == 'm' else 'проявляется'} "
+         f"через эту сферу. В Навамше (D9) он в {lord['nav_house']} доме ({HOUSE_KEY[lord['nav_house'] - 1]}) — "
+         f"так личность {'раскроется' if g == 'm' else 'раскроется'} во второй половине жизни.")
+    if data["rectify"]:
+        t += ("\n⚠️ Градус Лагны пограничный: небольшая неточность времени может сменить знак, "
+              "желательна ректификация.")
+    out += [t, ""]
+    out.append(f"<b>🌙 {T(data, 'Луна и Джанма-накшатра', 'Эмоции и душевный склад')}</b>\n"
+               f"Луна в знаке {mo['sign_name']}, {mo['house']} доме ({HOUSE_KEY[mo['house'] - 1]}): "
+               f"эмоциональный покой {'связан' if True else ''} с этой темой. "
+               f"{T(data, 'Накшатра', 'Лунная стоянка')} {mo['nak']} (пада {mo['pada']}) дает качества: "
+               f"{NAK_TRAITS[NAKSHATRAS.index(mo['nak'])]}. "
+               f"Состояние Луны — {mo['status'].lower()}, это окрашивает психику и реакцию на стресс.")
+    out.append("")
+    out.append(f"<b>☀️ Солнце</b>\nСолнце в знаке {su['sign_name']}, {su['house']} доме "
+               f"({HOUSE_KEY[su['house'] - 1]}). {STATUS_PHRASE.get(su['key'], '').capitalize()}. "
+               f"Внутренний вектор реализации — {SIGN_TRAITS[su['sign']]}, "
+               f"а проявлять себя {'вам' if True else ''} важнее всего через {HOUSE_KEY[su['house'] - 1]}.")
+    out.append("")
+    if ak:
+        out.append(f"<b>💎 {T(data, 'Атмакарака (АК)', 'Планета души')}</b>\n"
+                   f"{T(data, 'АК', 'Планета души')} — {ak['name']} ({ak['sign_name']}, {ak['house']} дом). "
+                   f"Главный урок души лежит в сфере: {HOUSE_KEY[ak['house'] - 1]}; "
+                   f"качество планеты — {PN.get(ak['code'], '')}.")
+        out.append("")
+    out.append(f"<b>☊☋ {T(data, 'Ось Раху / Кету', 'Путь души: откуда и куда')}</b>\n"
+               f"{T(data, 'Кету', 'Опыт прошлого')} в {ke['house']} доме ({HOUSE_KEY[ke['house'] - 1]}) — "
+               f"наработанное мастерство, к которому легко вернуться. "
+               f"{T(data, 'Раху', 'Новая задача')} в {ra['house']} доме ({HOUSE_KEY[ra['house'] - 1]}) — "
+               f"зона роста и новых задач, где {'вы' if True else ''} учитесь выходить за привычное.")
+    return "\n".join(out)
+
+
 def lagna_text(data):
+    return _lagna_basic(data) + "\n\n" + portrait_text(data)
+
+
+def _lagna_basic(data):
     lag = R(data, "As")
     ls = data["lagna"]
     lord = R(data, SIGN_LORDS[ls])
@@ -995,6 +1084,63 @@ def lagna_text(data):
         t.append("⚠️ Градус Лагны пограничный (менее 1,5° или более 28,5°): небольшая неточность времени "
                  "может сменить знак. Рекомендуется ректификация времени рождения.")
     return "\n".join(t)
+
+
+def planet_synthesis(data, r):
+    code, g = r["code"], data["gender"]
+    s = [f"{r['name']} отвечает за {PN[code]}."]
+    if code == "Ve":
+        s[0] += (" Для мужчины Венера — карака жены и отношений." if g == "m"
+                 else " Для женщины Венера — планета женственности, красоты и самоценности.")
+    if code == "Ju":
+        s[0] += (" Для женщины Юпитер — карака мужа и благословения в браке." if g == "f"
+                 else " Для мужчины Юпитер — карака мудрости, детей и наставников.")
+    if r["rules"]:
+        rl = ", ".join(f"{h} ({HOUSE_KEY[h - 1]})" for h in r["rules"])
+        s.append(f"Управляя домами {rl}, планета несет эти темы в {r['house']} дом "
+                 f"({HOUSE_KEY[r['house'] - 1]}), поэтому они переплетаются в жизни.")
+    else:
+        s.append(f"Узел не управляет знаками, но в {r['house']} доме ({HOUSE_KEY[r['house'] - 1]}) "
+                 "создает сильную тягу и повышенную концентрацию на этой сфере.")
+    sp = specials(r)
+    s.append(f"Состояние: {STATUS_PHRASE.get(r['key'], 'опорная точка карты')}"
+             + (f"; особо: {'; '.join(sp)}." if sp else "."))
+    s.append(f"В Навамше (D9) планета в {r['nav_house']} доме ({HOUSE_KEY[r['nav_house'] - 1]}) — "
+             "так её потенциал раскрывается во второй половине жизни"
+             + (", а варготтама усиливает результат." if r["varg"] else "."))
+    return "<b>Синтез:</b> " + " ".join(s)
+
+
+def house_synthesis(data, h, s, lord, here, asp, kar, v):
+    lvl = ("щедрая поддержка" if v >= 30 else ("зона для осознанной проработки" if v < 25 else "ровная поддержка"))
+    p = [f"{h} дом отвечает за {HOUSE_EVENTS[h - 1]}.",
+         f"Знак {SIGNS[s]} ({SIGN_TRAITS[s]}) окрашивает эту сферу, а балл САВ {v} — {lvl}.",
+         ("Внутри дома: " + ", ".join(here) + "." if here else "Дом пуст, поэтому всё решает его управитель.")
+         + (" Аспекты: " + ", ".join(asp) + " добавляют влияние." if asp else " Аспектов нет — сфера развивается спокойно."),
+         f"Бхавеш {lord['name']} стоит в {lord['house']} доме D1 ({HOUSE_KEY[lord['house'] - 1]}) и в "
+         f"{lord['nav_house']} доме D9, это формирует итоговый сценарий; его состояние — {lord['status'].lower()}.",
+         f"Главная карака — {kar}"
+         + (f" (для {'женщины' if data['gender'] == 'f' else 'мужчины'})" if h == 7 else "") + "."]
+    return "<b>Синтез:</b> " + " ".join(p)
+
+
+def dasha_summary(data, md, ad, pd):
+    a, b = R(data, md[0]), R(data, ad[0])
+    return ("<b>Резюме:</b> "
+            f"Главный фокус большого периода {NAMES[md[0]]} — {PN[md[0]]}; он активирует {a['house']} дом "
+            f"({HOUSE_KEY[a['house'] - 1]}). Подпериод {NAMES[ad[0]]} до {dd(ad[2])} выводит на первый план "
+            f"{b['house']} дом ({HOUSE_KEY[b['house'] - 1]}). Самый тонкий слой — {NAMES[pd[0]]} "
+            f"до {dd(pd[2])} — задает настроение ближайших недель. Используйте этот период для задач этих сфер.")
+
+
+def ashtaka_summary(sav):
+    strong = [i + 1 for i, v in enumerate(sav) if v >= 30]
+    weak = [i + 1 for i, v in enumerate(sav) if v < 25]
+    s1 = ("Самые сильные сферы (30+): " + ", ".join(f"{h} ({HOUSE_KEY[h - 1]})" for h in strong)
+          + ". Это ваша природная опора." if strong else "Ярко выраженных сфер 30+ нет — ресурс распределен ровно.")
+    s2 = ("Требуют внимания (ниже 25): " + ", ".join(f"{h} ({HOUSE_KEY[h - 1]})" for h in weak)
+          + ". Здесь нужны терпение и осознанные усилия." if weak else "Провальных сфер ниже 25 нет.")
+    return f"<b>Резюме:</b> {s1} {s2} Лучше вкладывать энергию туда, где балл выше, и бережно развивать слабые зоны."
 
 
 def planet_overview(data, code):
@@ -1016,8 +1162,7 @@ def planet_overview(data, code):
     asp = [NAMES[c] for c in data["aspects"][r["house"] - 1] if c != code]
     out.append("Аспекты на дом планеты: " + (", ".join(asp) if asp else "нет"))
     out.append("")
-    out.append(f"<b>Синтез:</b> {STATUS_PHRASE.get(r['key'], 'опорная точка карты')}. "
-               f"Тема проявления — {HOUSE_KEY[r['house'] - 1]}.")
+    out.append(planet_synthesis(data, r))
     return "\n".join(out)
 
 
@@ -1041,8 +1186,7 @@ def house_overview(data, h):
         f"Управитель: {lord['name']} — в D1 {lord['sign_name']}, {lord['house']} дом; "
         f"в D9 {lord['nav_house']} дом",
         f"Карака дома: {kar}", "",
-        f"<b>Синтез:</b> тема дома раскрывается через {lord['name']} "
-        f"({lord['status']}) и поддерживается баллом САВ {v}."])
+        house_synthesis(data, h, s, lord, here, asp, kar, v)])
 
 
 def dasha_overview(data):
@@ -1053,6 +1197,8 @@ def dasha_overview(data):
            f"Пратьянтардаша: {NAMES[pd[0]]} (до {dd(pd[2])})"]
     if nxt:
         out.append(f"Следующая антардаша: {NAMES[nxt[0]]} с {dd(nxt[1])}")
+    out.append("")
+    out.append(dasha_summary(data, md, ad, pd))
     out.append("")
     out.append("<b>Все Махадаши:</b>")
     for l, s, e in mds:
@@ -1075,6 +1221,8 @@ def ashtaka_overview(data):
         out.append(f"{r['name']}: {r['bav']}")
     out.append("")
     out.append("▲ — 30 и выше (опора), ▼ — ниже 25 (зона проработки).")
+    out.append("")
+    out.append(ashtaka_summary(sav))
     return "\n".join(out)
 
 
@@ -1107,13 +1255,26 @@ async def ask_llm(data, question):
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": f"Данные карты:\n{chart_summary(data)}\n\nВопрос: {question}"}]}
     headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
-    url = LLM_BASE.rstrip("/") + "/v1/chat/completions"
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as s:
-        async with s.post(url, json=payload, headers=headers) as r:
-            js = await r.json(content_type=None)
-            if r.status != 200:
-                raise RuntimeError(str(js)[:300])
-            return js["choices"][0]["message"]["content"].strip()
+    bases = [LLM_BASE]
+    if LLM_FALLBACK and LLM_FALLBACK not in bases:
+        bases.append(LLM_FALLBACK)
+    last_err = None
+    for attempt, base in enumerate(bases + ([bases[-1]] if len(bases) == 1 else [])):
+        url = base.rstrip("/") + "/v1/chat/completions"
+        try:
+            conn = aiohttp.TCPConnector(family=socket.AF_INET)
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120),
+                                             connector=conn) as s:
+                async with s.post(url, json=payload, headers=headers) as r:
+                    js = await r.json(content_type=None)
+                    if r.status != 200:
+                        raise RuntimeError(str(js)[:300])
+                    return js["choices"][0]["message"]["content"].strip()
+        except aiohttp.ClientError as e:
+            last_err = e
+            await asyncio.sleep(1)
+            continue
+    raise RuntimeError(f"Сетевая ошибка LLM: {last_err}")
 
 
 # ================================================================ БОТ
@@ -1327,9 +1488,10 @@ async def deliver(message, chart, imgs=None):
     await message.answer(
         f"<b>{html.escape(chart['name'])}</b> • {chart['date']} {chart['time']} • {html.escape(chart['city'])}\n"
         f"UTC {chart['utc_str']} • {chart['tz']}\nTrue Chitrapaksha, True Node. (X) — ретроградность.\n\n"
-        + table_text(chart) + "\n" + lagna_text(chart),
-        parse_mode="HTML",
-        reply_markup=kb([[btn("🎯 Разбор и вопросы по карте", "menu")]]))
+        + table_text(chart) + "\n" + _lagna_basic(chart),
+        parse_mode="HTML")
+    await message.answer(portrait_text(chart), parse_mode="HTML",
+                         reply_markup=kb([[btn("🎯 Разбор и вопросы по карте", "menu")]]))
 
 
 # ---------------------------------------------------------------- Банк карт
