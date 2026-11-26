@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 import swisseph as swe
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (BotCommand, BufferedInputFile, CallbackQuery,
@@ -584,10 +584,14 @@ def build_chart(name, gender, date_s, time_s, city, style, lat, lon, address):
     if not tz_name:
         raise ValueError("Не удалось определить часовой пояс")
     local = datetime.strptime(f"{date_s} {time_s}", "%d.%m.%Y %H:%M").replace(tzinfo=ZoneInfo(tz_name))
+    if not (1800 <= local.year <= 2100):
+        raise ValueError("Неверный формат даты: год рождения должен быть в диапазоне 1800–2100. "
+                         "Пример: 27.02.1988")
     utc = local.astimezone(timezone.utc)
     swe.set_sid_mode(swe.SIDM_TRUE_CITRA)
     flags = swe.FLG_SWIEPH | swe.FLG_SIDEREAL | swe.FLG_SPEED
-    jd = swe.julday(utc.year, utc.month, utc.day, utc.hour + utc.minute / 60 + utc.second / 3600)
+    hour_utc = float(utc.hour) + float(utc.minute) / 60.0 + float(utc.second) / 3600.0
+    jd = swe.julday(int(utc.year), int(utc.month), int(utc.day), float(hour_utc), swe.GREG_CAL)
     _, ascmc = swe.houses_ex(jd, lat, lon, b"P", flags)
     asc = ascmc[0] % 360
 
@@ -1149,15 +1153,17 @@ async def begin_form(message, state, uid):
     await message.answer(WELCOME, reply_markup=MAIN_KB)
 
 
-@router.message(CommandStart())
-@router.message(F.text == "🗺 Новая карта")
+@router.message(StateFilter("*"), CommandStart())
+@router.message(StateFilter("*"), F.text == "🗺 Новая карта")
 async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     await begin_form(message, state, message.from_user.id)
 
 
-@router.callback_query(F.data == "newchart")
+@router.callback_query(StateFilter("*"), F.data == "newchart")
 async def cb_new(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
+    await state.clear()
     await begin_form(cb.message, state, cb.from_user.id)
 
 
@@ -1179,9 +1185,12 @@ async def f_gender(cb: CallbackQuery, state: FSMContext):
 @router.message(Form.date, F.text)
 async def f_date(message: Message, state: FSMContext):
     try:
-        datetime.strptime(message.text.strip(), "%d.%m.%Y")
+        dt = datetime.strptime(message.text.strip(), "%d.%m.%Y")
+        if not (1800 <= dt.year <= 2100):
+            raise ValueError
     except ValueError:
-        await message.answer("Неверный формат. Пример: 27.02.1988")
+        await message.answer("Неверный формат даты. Введите ДД.ММ.ГГГГ, год от 1800 до 2100. "
+                             "Пример: 27.02.1988")
         return
     await state.update_data(date=message.text.strip())
     await state.set_state(Form.time)
@@ -1272,8 +1281,8 @@ async def f_go(cb: CallbackQuery, state: FSMContext):
                                         d["city"], d["style"], d["lat"], d["lon"], d["address"])
         imgs = await asyncio.to_thread(render_all, chart)
     except Exception as e:
-        await wait.edit_text(f"Ошибка расчета: {e}\nНачните заново: /start")
         await state.clear()
+        await wait.edit_text(f"Ошибка расчета: {e}\nНачните заново: /start")
         return
     await state.clear()
     cid = save_chart(uid, chart)
