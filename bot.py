@@ -590,8 +590,7 @@ def build_chart(name, gender, date_s, time_s, city, style, lat, lon, address):
     utc = local.astimezone(timezone.utc)
     swe.set_sid_mode(swe.SIDM_TRUE_CITRA)
     flags = swe.FLG_SWIEPH | swe.FLG_SIDEREAL | swe.FLG_SPEED
-    hour_utc = float(utc.hour) + float(utc.minute) / 60.0 + float(utc.second) / 3600.0
-    jd = swe.julday(int(utc.year), int(utc.month), int(utc.day), float(hour_utc), swe.GREG_CAL)
+    jd = 2440587.5 + utc.timestamp() / 86400.0
     _, ascmc = swe.houses_ex(jd, lat, lon, b"P", flags)
     asc = ascmc[0] % 360
 
@@ -1657,7 +1656,7 @@ async def fallback(message: Message):
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-WEBHOOK_HOST = "https://spacepill.bothost.tech"
+WEBHOOK_HOST = "https://bothost.tech"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
