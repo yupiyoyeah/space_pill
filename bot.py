@@ -588,9 +588,9 @@ def build_chart(name, gender, date_s, time_s, city, style, lat, lon, address):
         raise ValueError("Неверный формат даты: год рождения должен быть в диапазоне 1800–2100. "
                          "Пример: 27.02.1988")
     utc = local.astimezone(timezone.utc)
-    swe.set_sid_mode(swe.SIDM_TRUE_CITRA)
+    swe.set_sid_mode(swe.SIDM_LAHIRI)
     flags = swe.FLG_SWIEPH | swe.FLG_SIDEREAL | swe.FLG_SPEED
-    jd = 2440587.5 + utc.timestamp() / 86400.0
+    jd = float(2440587.5 + utc.timestamp() / 86400.0)
     _, ascmc = swe.houses_ex(jd, lat, lon, b"P", flags)
     asc = ascmc[0] % 360
 
@@ -834,7 +834,7 @@ def draw_d1(data):
     for (t, k), f, w in zip(legend, fonts, widths):
         d.text((x, 925), t, font=f, fill=STYLE[k][1], anchor="lm")
         x += w + 22
-    d.text((450, 955), "Карта Раши (D1) • Юля Мани • True Chitrapaksha",
+    d.text((450, 955), "Карта Раши (D1) • Юля Мани • Lahiri",
            font=get_font(14), fill=GRAY, anchor="mm")
     return img
 
@@ -1656,7 +1656,7 @@ async def fallback(message: Message):
 from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-WEBHOOK_HOST = "https://bothost.tech"
+WEBHOOK_HOST = "https://spacepill.bothost.tech"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
