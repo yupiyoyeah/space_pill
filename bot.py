@@ -74,6 +74,9 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER, name TEXT, gender TEXT, date TEXT, time TEXT,
             city TEXT, style TEXT, json_data TEXT)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS ai_cache(
+            chart_id INTEGER, topic_key TEXT, content TEXT,
+            PRIMARY KEY (chart_id, topic_key))""")
 
 
 def get_user(uid):
@@ -1243,15 +1246,20 @@ def chart_summary(data):
 
 
 # ================================================================ LLM
-async def ask_llm(data, question):
+async def ask_llm(data, question, max_tokens=900):
     if not LLM_API_KEY:
         raise RuntimeError("LLM_API_KEY не задан")
     style = ("Используй санскритские термины с краткими пояснениями." if data["style"] == "term"
              else "Пиши простым языком без сложных терминов.")
-    system = ("Ты — практикующий астролог Джйотиш (школа Юли Мани). Отвечай по-русски, тепло и конкретно, "
-              "строго опираясь на данные карты. Обращайся с учетом пола. " + style +
-              " Без запугивания и медицинских диагнозов. Объем до 1800 знаков.")
-    payload = {"model": LLM_MODEL, "max_tokens": 900, "temperature": 0.7,
+    gender_note = ("Человек — женщина: используй женский род." if data["gender"] == "f"
+                   else "Человек — мужчина: используй мужской род.")
+    system = ("Ты — Юля Мани, чуткий и глубокий ведический астролог (Джйотиш). Обращайся к человеку тепло "
+              "и близко на «ты» (учитывая мужской или женский род в глаголах и прилагательных). Пиши живым, "
+              "образным, человеческим языком без канцелярита и общих фраз из учебников. Связывай показатели "
+              "между собой, показывай реальные жизненные сценарии, внутренние состояния и точки опоры. "
+              "Строго опирайся на данные карты. " + gender_note + " " + style +
+              " Без запугивания и медицинских диагнозов.")
+    payload = {"model": LLM_MODEL, "max_tokens": max_tokens, "temperature": 0.7,
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": f"Данные карты:\n{chart_summary(data)}\n\nВопрос: {question}"}]}
     headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
@@ -1275,6 +1283,44 @@ async def ask_llm(data, question):
             await asyncio.sleep(1)
             continue
     raise RuntimeError(f"Сетевая ошибка LLM: {last_err}")
+
+
+def cache_get(chart_id, key):
+    if not chart_id:
+        return None
+    with db() as c:
+        r = c.execute("SELECT content FROM ai_cache WHERE chart_id=? AND topic_key=?",
+                      (chart_id, key)).fetchone()
+    return r["content"] if r else None
+
+
+def cache_put(chart_id, key, content):
+    if not chart_id:
+        return
+    with db() as c:
+        c.execute("INSERT OR REPLACE INTO ai_cache(chart_id,topic_key,content) VALUES(?,?,?)",
+                  (chart_id, key, content))
+
+
+async def cached_llm(chart_id, data, topic_key, prompt, max_tokens=1100):
+    """Кэш -> gpt-5-mini -> сохранение. При ошибке/отсутствии ключа возвращает None (нужен fallback)."""
+    hit = cache_get(chart_id, topic_key)
+    if hit:
+        return hit
+    try:
+        ans = await ask_llm(data, prompt, max_tokens=max_tokens)
+    except Exception as e:
+        print(f"LLM fallback ({topic_key}): {e}", flush=True)
+        return None
+    if not ans:
+        return None
+    cache_put(chart_id, topic_key, ans)
+    return ans
+
+
+async def send_long(message, text, **kw):
+    for i in range(0, len(text), 4000):
+        await message.answer(text[i:i + 4000], **kw)
 
 
 # ================================================================ БОТ
@@ -1477,10 +1523,26 @@ async def f_go(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     cid = save_chart(uid, chart)
     await wait.delete()
-    await deliver(cb.message, chart, imgs)
+    await deliver(cb.message, chart, imgs, cid)
 
 
-async def deliver(message, chart, imgs=None):
+PASSPORT_PROMPT = (
+    "Сделай цельный, душевный бесплатный разбор Астро-паспорта (2200–2800 символов) строго по 5 блокам, "
+    "каждый с заголовком-эмодзи на отдельной строке:\n"
+    "1. 🧭 Твоя природа и вектор жизни (Лагна и Лагнеш в D1 и D9): как тебя считывает мир, в чем твоя "
+    "естественная сила и как меняется путь во второй половине жизни по Навамше.\n"
+    "2. 🌙 Твой внутренний мир и психика (Луна и Джанма-накшатра): как ты проживаешь эмоции, чего просит "
+    "душа для спокойствия и безопасности.\n"
+    "3. ☀️ Твой внутренний стержень (Солнце): через что раскрываются уверенность, самоценность и "
+    "социальная реализация.\n"
+    "4. 💎 Главный урок души (Атмакарака): какая планета ведет эволюцию и какие жизненные ситуации "
+    "создает для роста.\n"
+    "5. ☊☋ Кармический вектор (Раху / Кету): на какой опыт прошлого ты опираешься (Кету) и в какую новую "
+    "сферу (Раху) важно смело шагнуть.\n"
+    "Без markdown-разметки (никаких звездочек и решеток), обычный текст. Не перечисляй сухие цифры.")
+
+
+async def deliver(message, chart, imgs=None, cid=None):
     if imgs is None:
         imgs = await asyncio.to_thread(render_all, chart)
     media = [InputMediaPhoto(media=BufferedInputFile(b, filename=n)) for n, b in imgs]
@@ -1488,10 +1550,21 @@ async def deliver(message, chart, imgs=None):
     await message.answer(
         f"<b>{html.escape(chart['name'])}</b> • {chart['date']} {chart['time']} • {html.escape(chart['city'])}\n"
         f"UTC {chart['utc_str']} • {chart['tz']}\nTrue Chitrapaksha, True Node. (X) — ретроградность.\n\n"
-        + table_text(chart) + "\n" + _lagna_basic(chart),
+        + table_text(chart),
         parse_mode="HTML")
-    await message.answer(portrait_text(chart), parse_mode="HTML",
-                         reply_markup=kb([[btn("🎯 Разбор и вопросы по карте", "menu")]]))
+    wait = await message.answer("✨ Читаю твою карту...")
+    txt = await cached_llm(cid, chart, "passport_full", PASSPORT_PROMPT, max_tokens=1200)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    markup = kb([[btn("🎯 Разбор и вопросы по карте", "menu")]])
+    if txt:
+        await send_long(message, txt[:-0 or None] if False else txt)
+        await message.answer("Выбери раздел для глубокого разбора:", reply_markup=markup)
+    else:
+        await message.answer(_lagna_basic(chart), parse_mode="HTML")
+        await message.answer(portrait_text(chart), parse_mode="HTML", reply_markup=markup)
 
 
 # ---------------------------------------------------------------- Банк карт
@@ -1554,7 +1627,7 @@ async def cb_sel(cb: CallbackQuery):
         await cb.message.answer("Карта не найдена.")
         return
     set_active(uid, cid)
-    await deliver(cb.message, chart)
+    await deliver(cb.message, chart, None, cid)
 
 
 @router.callback_query(F.data.startswith("del:"))
@@ -1626,9 +1699,9 @@ async def cb_section(cb: CallbackQuery):
         b.adjust(2)
         await cb.message.answer("Выберите сферу жизни:", reply_markup=b.as_markup())
     elif sec == "da":
-        await send_topic(cb.message, data, "da", "0")
+        await send_topic(cb.message, data, "da", "0", cb.from_user.id)
     else:
-        await send_topic(cb.message, data, "av", "0")
+        await send_topic(cb.message, data, "av", "0", cb.from_user.id)
 
 
 @router.callback_query(F.data.regexp(r"^(pl|bh):"))
@@ -1637,19 +1710,45 @@ async def cb_topic(cb: CallbackQuery):
     data = await need_chart(cb.message, cb.from_user.id)
     if data:
         kind, arg = cb.data.split(":")
-        await send_topic(cb.message, data, kind, arg)
+        await send_topic(cb.message, data, kind, arg, cb.from_user.id)
 
 
-async def send_topic(message, data, kind, arg):
+async def send_topic(message, data, kind, arg, uid=None):
+    cid = active_chart(uid)[0] if uid else 0
     if kind == "pl":
-        txt = planet_overview(data, arg)
+        key = f"pl_{arg}"
+        subject = f"планету {NAMES[arg]}"
     elif kind == "bh":
-        txt = house_overview(data, int(arg))
+        key = f"bh_{arg}"
+        subject = f"{arg}-й дом ({HOUSE_KEY[int(arg) - 1]})"
     elif kind == "da":
-        txt = dasha_overview(data)
+        key = "dasha"
+        subject = "текущие периоды Вимшоттари Даша (Махадаша, Антардаша, Пратьянтардаша) и что ждет дальше"
     else:
-        txt = ashtaka_overview(data)
-    await message.answer(txt, parse_mode="HTML")
+        key = "ashtaka"
+        subject = "силу карты по Аштакаварге: где у человека природная опора, а где нужны бережные усилия"
+    prompt = (f"Сделай живой, теплый персональный обзор: {subject}. Раскрой это в связке с остальной картой "
+              "(Лагна, Луна, управители, D9, аспекты, текущий период). Без сухого перечисления цифр — "
+              "они уже есть в шапке. Покажи реальные жизненные сценарии, внутренние состояния и точки опоры. "
+              "Объем 1200–1800 знаков, обычный текст без markdown.")
+    wait = await message.answer("✨ Читаю карту...")
+    txt = await cached_llm(cid, data, key, prompt, max_tokens=900)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+    if txt:
+        await send_long(message, txt)
+    else:
+        if kind == "pl":
+            fb = planet_overview(data, arg)
+        elif kind == "bh":
+            fb = house_overview(data, int(arg))
+        elif kind == "da":
+            fb = dasha_overview(data)
+        else:
+            fb = ashtaka_overview(data)
+        await message.answer(fb, parse_mode="HTML")
     await show_questions(message, kind, arg)
 
 
