@@ -484,8 +484,8 @@ FONT_FILES = {
         "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSans/full/ttf/NotoSans-Bold.ttf",
         "https://github.com/google/fonts/raw/main/ofl/notosans/NotoSans-Bold.ttf"],
     "NotoSansSymbols2-Regular.ttf": [
-        "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansSymbols2/full/ttf/NotoSansSymbols2-Regular.ttf",
-        "https://github.com/google/fonts/raw/main/ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf"],
+        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssymbols2/NotoSansSymbols2-Regular.ttf",
+        "https://raw.githubusercontent.com/notofonts/notofonts.github.io/main/fonts/NotoSansSymbols2/full/ttf/NotoSansSymbols2-Regular.ttf"],
 }
 
 
@@ -527,7 +527,26 @@ def get_font(size, bold=False):
 
 
 def get_sym(size):
-    return _font("NotoSansSymbols2-Regular.ttf", size)
+    k = ("sym", size)
+    if k in _fc:
+        return _fc[k]
+    cands = [
+        os.path.join(FONT_DIR, "NotoSansSymbols2-Regular.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        os.path.join(FONT_DIR, "DejaVuSans.ttf"),
+        "DejaVuSans.ttf",
+        os.path.join(FONT_DIR, "NotoSans-Regular.ttf"),
+    ]
+    for p in cands:
+        try:
+            if os.path.isabs(p) and not os.path.exists(p):
+                continue
+            _fc[k] = ImageFont.truetype(p, size)
+            return _fc[k]
+        except Exception:
+            continue
+    _fc[k] = get_font(size)
+    return _fc[k]
 
 
 # ================================================================ РАСЧЕТЫ
@@ -763,6 +782,15 @@ def chunks(seq, n):
     return [seq[i:i + n] for i in range(0, len(seq), n)]
 
 
+ELEMENT_FILL = {0: "#FDF0EA", 1: "#EFF5EC", 2: "#EEF3FB", 3: "#EAF6F5"}
+
+
+def fill_elements(d, polys, lagna_sign):
+    for h, (pts, _) in polys.items():
+        sign_idx = (lagna_sign + h - 1) % 12
+        d.polygon(pts, fill=ELEMENT_FILL[sign_idx % 4])
+
+
 def draw_grid(d, polys, ox, oy, s):
     for pts, _ in polys.values():
         d.line(pts + [pts[0]], fill=PENCIL, width=2)
@@ -810,6 +838,7 @@ def draw_d1(data):
     d.text((450, 45), title, font=get_font(20, True), fill=PEN, anchor="mm")
     ox, oy, s = 40, 80, 820
     polys = house_polys(ox, oy, s)
+    fill_elements(d, polys, data["lagna"])
     draw_grid(d, polys, ox, oy, s)
     items = {}
     for r in data["rows"]:
@@ -845,6 +874,7 @@ def draw_d9(data):
            fill=PEN, anchor="mm")
     ox, oy, s = 40, 90, 820
     polys = house_polys(ox, oy, s)
+    fill_elements(d, polys, data["nav_lagna"])
     draw_grid(d, polys, ox, oy, s)
     items = {}
     for r in data["rows"]:
